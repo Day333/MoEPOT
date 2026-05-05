@@ -34,7 +34,11 @@ test_paths: [
 #####################################################
 ##########   Model-Ti
 #####################################################
-resume_path: 'logs_pretrain/checkpoints/model_moepot_tiny.pth'
+# resume_path: 'logs_pretrain/MoEPOT_ns2d_0417_21_00_10:Ti_6_21800/model_19.pth'
+# resume_path: 'logs_pretrain/MoEPOT_ns2d_0421_11_19_31:Ti_6_21800/model_19.pth'
+# resume_path: 'logs_pretrain/MoEPOT_ns2d_0430_00_09_01:Ti_6_21800/model_19.pth'
+resume_path: 'logs_pretrain/MoEPOT_ns2d_0502_10_57_35:Ti_6_21800/model_19.pth'
+
 tasks:
  comment: ['t-eva']
  batch_size: [20]

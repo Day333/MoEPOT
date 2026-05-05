@@ -155,23 +155,40 @@ class Block(nn.Module):
             self.MoE.feature_extractor.eval()
             self.MoE.gating.eval()
         self.double_skip = double_skip
-    def forward(self, x):
+
+    # def forward(self, x):
+    #     residual = x
+    #     x = self.norm1(x)
+    #     x = self.filter(x)
+
+
+    #     if self.double_skip:
+    #         x = x + residual
+    #         residual = x
+
+    #     x = self.norm2(x)
+    #     x, loss_gate = self.MoE(x)
+        
+    #     x = x + residual
+
+    #     return x, loss_gate
+
+    def forward(self, x, temporal_residual=None): 
         residual = x
         x = self.norm1(x)
         x = self.filter(x)
-
 
         if self.double_skip:
             x = x + residual
             residual = x
 
         x = self.norm2(x)
-        x, loss_gate = self.MoE(x)
+        
+        x, loss_gate = self.MoE(x, temporal_residual=temporal_residual) 
         
         x = x + residual
 
         return x, loss_gate
-
 
 class PatchEmbed(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768, out_dim=128,act='gelu'):
@@ -362,25 +379,45 @@ class MoEPOTNet(nn.Module):
 
 
         grid = self.get_grid_3d(x) 
-        x = torch.cat((x, grid), dim=-1).contiguous() # B, X, Y, T, C+3
-        x = rearrange(x, 'b x y t c -> (b t) c x y')
-        x = self.patch_embed(x)
-        x = x + self.pos_embed
-         
-        x = rearrange(x, '(b t) c x y -> b x y t c', b=B, t=T)
+        
+        # Res moe
+        x_prev = torch.cat([x[:, :, :, :1, :], x[:, :, :, :-1, :]], dim=3)
+        delta_x = x - x_prev 
 
-        x = self.time_agg_layer(x)
+        # ==========================================
+        # 改进点 1: 对 delta 做归一化/能量化
+        # ==========================================
+        # 这里的 x 形状为 [B, X, Y, T, C]，所以 dim=(1, 2, 3, 4) 计算单样本的全局能量均值
+        delta_norm_scale = x.abs().mean(dim=(1, 2, 3, 4), keepdim=True) + 1e-6
+        delta_x = delta_x / delta_norm_scale
+        # ==========================================
 
-        x = rearrange(x, 'b x y c -> b c x y')
+        x_main_full = torch.cat((x, grid), dim=-1).contiguous()       # [B, X, Y, T, 7]
+        x_res_full = torch.cat((delta_x, grid), dim=-1).contiguous()  # [B, X, Y, T, 7]
+
+        x_main = rearrange(x_main_full, 'b x y t c -> (b t) c x y')
+        x_main = self.patch_embed(x_main) + self.pos_embed
+        
+        x_res = rearrange(x_res_full, 'b x y t c -> (b t) c x y')
+        x_res = self.patch_embed(x_res)
+
+        x_main = rearrange(x_main, '(b t) c x y -> b x y t c', b=B, t=T)
+        x_res = rearrange(x_res, '(b t) c x y -> b x y t c', b=B, t=T)
+        
+        x_agg = self.time_agg_layer(x_main) # [B, X, Y, embed_dim]
+        res_agg = self.time_agg_layer(x_res) # [B, X, Y, embed_dim]
+
+        x = rearrange(x_agg, 'b x y c -> b c x y')
+        res_info = rearrange(res_agg, 'b x y c -> b c x y')
 
         if self.normalize:
-            x = scale_sigma * x + scale_mu   ### Ada_in layer 
+            x = scale_sigma * x + scale_mu
         
         loss_total = 0
         for blk in self.blocks:
-            x, loss = blk(x)
+            x, loss = blk(x, temporal_residual=res_info)
             loss_total += loss
-
+        
         cls_token = x.mean(dim=(2, 3), keepdim=False)
         cls_pred = self.cls_head(cls_token)
 
